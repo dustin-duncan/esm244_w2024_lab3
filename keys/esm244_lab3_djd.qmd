@@ -119,7 +119,7 @@ write_sf(sesbania_nocounty_sf, here("data","red_sesbania","ds80_for_lab.gpkg"))
 
 ## Read in the sesbania data
 
-The data exist in `data/red_sesbania`, and the shapefile is stored as `ds80_for_lab.gpkg`.  We also want to check the coordinate reference system, and plot the data for a quick visual understanding.
+The data exist in `data/red_sesbania`, and the shapefile is stored as `ds80_for_lab.gpkg`. We also want to check the coordinate reference system, and plot the data for a quick visual understanding.
 
 ```{r}
 sesbania_sf <- read_sf(here("data","red_sesbania","ds80_for_lab.gpkg")) %>%
@@ -175,6 +175,9 @@ ca_sesb_sf <- ca_counties_sf %>%
   st_join(sesbania_3857_sf)
 
 head(ca_sesb_sf)
+
+sesb_ca_sf <- st_join(sesbania_3857_sf, ca_counties_sf)
+view(sesb_ca_sf)
 ```
 
 Note: joining defaults to keeping the geometry of the first object, and adds the records of the second where they spatially overlap the first (but drops the geometry of the second). And then we can find counts (note: these are not counts for individual plants, but by record in the dataset) by county. We can't just count the rows (e.g., using count()) because some rows are counties with no records (and sesbania information is all NAs).
@@ -196,67 +199,74 @@ Keeping the CA polygons...
 
 ```{r}
 sesb_counts_sf <- ca_sesb_sf %>% 
-  group_by(county) %>%
-  summarize(n_records = sum(!is.na(id)))
-
-head(sesb_counts_sf)
+  group_by(county) %>% 
+  summarize(n_records = sum(!is.na(id))) %>% 
+  mutate(n_records = as.numeric(n_records))
 ```
 
 Then we can plot a choropleth using the number of records for red sesbania as the fill color (instead of what we used previously, land area):
 
 ```{r}
 ggplot(data = sesb_counts_sf) +
-  geom_sf(aes(fill = n_records), color = "white", size = 0.1) +
-  scale_fill_gradientn(colors = c("lightgray","orange","red")) +
+  geom_sf(aes(fill = n_records), color = "grey90", size = 0.1) +
+  scale_fill_gradientn(colors = c("lightgray","orange","purple")) +
   theme_minimal() +
   labs(fill = "Number of S. punicea records")
 ```
+
+## Next analysis:
 
 So we see that we can still use our usual wrangling skills! Let's do a bit more for fun, just to prove that our existing wrangling skills still work with spatial data - the spatial information just sticks to it! Only plot the county with the greatest number of red sesbania records, and make a map of those locations (yeah there are many ways to do this).
 
 ### Pseudocode here!
 
-
-
-
-
+figure out which county has most records filter by just that county take subset of other location information - watershed or location plot the entire map or just plot the county with the counts, and add the subset of point locations maybe just use spatial join dataset
 
 ```{r}
-# Subset of sesbania point locations only in Solano County
+# Go to sesb_counts_sf or do another way 
 
-county_max <- sesb_counts_sf %>%
-  filter(n_records == max(n_records)) %>%
-  pull(county)
+# Find county with max
+county_max <- sesb_counts_sf %>% 
+  filter(n_records == max(n_records)) %>% 
+  pull(county) 
+# Or slice_max(n_records)
+# Or which.max(n_records) --> This gives the row index number 
 
-### we appended the county names to Sesbania records earlier:
-solano_sesb_sf <- sesb_counties_sf %>% 
-  filter(county == county_max) ### what if two counties had the same max value?
+# Subset your county max
+solano_sesb_sf <- sesb_ca_sf %>% 
+  filter(county == county_max) 
+# If you had 2 max counties it would be weird. To address the two counties you would use %in% instead of == 
 
-# Only keep Solano polygon from California County data
+# grab your geometries
 solano_sf <- ca_counties_sf %>% 
   filter(county %in% county_max)
 
-ggplot() +
-  geom_sf(data = solano_sf) +
-  geom_sf(data = solano_sesb_sf, color = 'red')
+# PLot it 
+
+ggplot() + 
+  geom_sf(data = solano_sf) + 
+  geom_sf(data = solano_sesb_sf, color = "red")
 ```
 
 # Making an interactive map with `tmap`
 
 Sometimes we'll want to make a map interactive so that audience members can zoom in, explore different areas, etc. We can use the `tmap` package to create an interactive map. Let's make one for our California counties (fill aesthetic by land area) with the red sesbania locations on top:
 
-```{r}
+```{r, eval=FALSE, echo=TRUE,  include=TRUE}
 #| eval: false ### the interactive map makes the HTML huge
 #| echo: true
 
 # Set the viewing mode to "interactive":
-tmap_mode(mode = "view")
+tmap_mode(mode = "view") # this tells tmap to turn on the interactive viewer when you run this 
+
+tm_shape(ca_counties_sf) + 
+  tm_fill("land_km2", palette = "BuGn") + # Color counties according to land area
+  tm_shape(sesbania_sf) + # tmap automatically converges coordinate reference system
+  tm_dots()
+
 
 # Then make a map (with the polygon fill color updated by variable 'land_km2', updating the color palette to "BuGn"), then add another shape layer for the sesbania records (added as dots):
-tm_shape(ca_counties_sf) +
-  tm_fill("land_km2", palette = "BuGn") +
-  tm_shape(sesbania_sf) +
-  tm_dots()
+
 ```
 
 See *all* kinds of other cool ways you can update your interactive tmaps.
