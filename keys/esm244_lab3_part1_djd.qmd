@@ -252,7 +252,7 @@ ggplot() +
 
 Sometimes we'll want to make a map interactive so that audience members can zoom in, explore different areas, etc. We can use the `tmap` package to create an interactive map. Let's make one for our California counties (fill aesthetic by land area) with the red sesbania locations on top:
 
-```{r, eval=FALSE, echo=TRUE,  include=TRUE}
+```{r}
 #| eval: false ### the interactive map makes the HTML huge
 #| echo: true
 

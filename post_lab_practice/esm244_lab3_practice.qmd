@@ -1,0 +1,181 @@
+---
+title: "Lab 3: Post-Lab Practice"
+author: "Dustin Duncan"
+format: 
+  html:
+    code-fold: show
+    toc: true
+    number-sections: true
+    embed-resources: true
+editor: visual
+execute:
+  echo: true
+  message: false
+  warning: false
+---
+
+```{r}
+#| message: false
+# Loading all my packages 
+library(tidyverse)
+library(here)
+library(sf) # Vector spatial data
+library(terra) # Raster spatial data
+library(tidyterra) # For rasters in GGplot
+library(gstat)
+library(stars)
+library(broom)
+library(tmap)
+rm(list = ls())
+```
+
+
+## Analysis Part 1
+
+```{r}
+#| output: false
+
+sb_sf <- read_sf(here("data/pop_dens/sbc_pop_dens.shp")) 
+counties_sf <- read_sf(here("data/ca_counties/CA_Counties_TIGER2016.shp"))
+
+# Checking coordinate reference system
+sb_sf %>% st_crs()
+# CRS is WGS 84, ID is "EPSG", 4326
+sb_sf %>% terra::crs()
+
+counties_sf %>%  st_crs()
+# CRS is WGS 84 / pseudo-mercator, ID is "EPSG", 3857
+counties_sf %>% terra::crs()
+
+# These two are different CRS so we're going to transform the sb one to counties
+sb_3857_sf <- st_transform(sb_sf, 3857)
+sb_3857_sf %>% st_crs()
+# Easy 
+
+# Cleaning names 
+counties_sf <- counties_sf %>% janitor::clean_names() %>% 
+  select(name)
+```
+
+### Exploration of data
+
+```{r}
+plot(sb_sf)
+# plot(counties_sf)
+# we can see that our counties data has many things to plot. We just want countyFP
+
+# plotting them together
+ggplot() + 
+  geom_sf(data = counties_sf) + 
+  geom_sf(data = sb_3857_sf, size = 1, color = "blue")
+```
+
+### Plotting outline of sb county and population density together 
+
+```{r}
+# which means were going to specify sb_sf first 
+sb_county_sf <- counties_sf %>% 
+  filter(name == "Santa Barbara")
+
+sb_popdens_sf <- sb_3857_sf %>% 
+  st_intersection(sb_county_sf)
+
+ggplot() + 
+  geom_sf(data = sb_county_sf, fill = "grey", size = 5) + 
+  geom_sf(data = sb_3857_sf, aes(color = popdens)) + 
+  theme_void()
+```
+
+The population densities honestly do make sense. There are lower population densities in the upper regions of santa barbara county and higher densities in the lower part of the county.
+
+### Plotting histogram of the population densities 
+
+```{r}
+ggplot(data = sb_3857_sf, aes(x = popdens)) + 
+  geom_histogram()
+```
+
+Interesting output. Lets log-transform it.
+
+```{r}
+sb_log_sf <- sb_3857_sf %>% 
+  mutate(popdens = log(popdens))
+ggplot(data = sb_log_sf, aes(x = popdens)) + 
+  geom_histogram()
+```
+
+Now its more normal. Definitely a log-normal distribution.
+
+## Analysis Part 2
+
+### Making a variogram of log-transformed population density
+
+```{r}
+sb_pop_vgm <- gstat::variogram(popdens ~ 1, data = sb_log_sf)
+
+plot(sb_pop_vgm)
+```
+
+Fitting a line to the plot so that when we do interpolation we can use that function.
+
+```{r}
+vgm_fit <- fit.variogram(sb_pop_vgm,
+                         model = vgm(model = "Gau", nugget = FALSE))
+# It doesnt appear that when you include a nugget that it makes it better
+plot(sb_pop_vgm, vgm_fit)
+attr(vgm_fit, "SSErr")
+```
+
+### Creating a grid to interpolate on it where the model says the data should be 
+
+```{r}
+# Draw a square the exact size of my county
+sb_grid <- st_bbox(sb_county_sf) %>% 
+  stars::st_as_stars(dx = 1000, dy = 1000)
+
+# take the variogram, the grid, and the model and smash them together to get interpolations 
+
+pop_krige <- krige(popdens ~ 1, sb_log_sf, sb_grid, model = vgm_fit)
+
+plot(pop_krige)
+```
+
+### Plotting predicted values against actual using GGplot
+
+```{r}
+# making the krige easier to work with by turning it into a raster 
+
+krige_rast <- pop_krige %>% 
+  terra::rast() %>% 
+  setNames(c("pred", "var"))
+
+
+ggplot() + 
+  tidyterra::geom_spatraster(data = krige_rast, aes(fill = var), alpha = 0.75) + 
+  geom_sf(data = sb_log_sf, aes(fill = popdens), shape = 21) + 
+  geom_sf(data = sb_county_sf, color = "black", fill = NA) + 
+  scale_fill_gradient(low = "coral", high = "blue") + 
+  labs(title = "Variance")
+
+ggplot() + 
+  tidyterra::geom_spatraster(data = krige_rast, aes(fill = pred), alpha = 0.75) + 
+  geom_sf(data = sb_log_sf, aes(fill = popdens), shape = 21) + 
+  geom_sf(data = sb_county_sf, color = "black", fill = NA) + 
+  scale_fill_gradient(low = "coral", high = "blue") + 
+  labs(title = "Predicted Values")
+```
+
+Interestingly enough there is high variance outside of santa barbara county and lower variance inside. Super chill!
+
+
+
+
+
+
+
+
+
+
+
+
+

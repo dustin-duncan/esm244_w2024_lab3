@@ -1,0 +1,134 @@
+---
+title: "ESM244 Lab 3: kriging!"
+author: "Dustin Duncan"
+format: 
+  html:
+    code-fold: show
+    toc: true
+    number-sections: true
+    embed-resources: true
+editor: visual
+execute:
+  echo: true
+  message: false
+  warning: false
+---
+
+```{r}
+library(tidyverse)
+library(here)
+library(sf) # Vector spatial data
+library(terra) # Raster spatial data
+library(tidyterra) # For rasters in GGplot
+library(gstat)
+library(stars)
+rm(list = ls())
+```
+
+# Overview
+
+Create a variogram in R to understand the spatial dependence of ground water depth in California.
+
+# Read in data
+
+```{r}
+ca_counties_sf <- read_sf(here("data/ca_counties"), layer = "CA_Counties_TIGER2016") %>% 
+  janitor::clean_names() %>% 
+  select(name)
+
+ca_dgw_sf <- read_sf(here("data", "ca_dgw", "F2013_DBGS_Points_20150720_093252.gpkg")) %>% 
+  janitor::clean_names()
+```
+
+```{r}
+# Check the coordinate reference systems and make sure they match up 
+# st_crs(ca_counties_sf) # WGS 84 / Pseudo-Mercator
+# st_crs(ca_dgw_sf) # WGS 84
+
+# We need to make them the same CRS
+ca_dgw_sf <- st_transform(ca_dgw_sf, 3857) %>% 
+  rename(depth = dgbs)
+
+# We will be looking at the column dgbs. "Depth to Groundwater Below Surface". Changed it in the above code
+
+ggplot() + 
+  geom_sf(data = ca_counties_sf) + 
+  geom_sf(data = ca_dgw_sf, aes(color = depth))
+
+# Lets focus on a county where there's a lot of wells to drive into our variogram
+```
+
+# Focus on San Joaquin County
+
+```{r}
+sj_county_sf <- ca_counties_sf %>% 
+  filter(name == "San Joaquin")
+
+# Keep only groundwater observations for ground water depth in that county
+
+# There is no county variable in that dataframe so you cant join by county, but you can use the following function to intersect them 
+
+sj_depth_sf <- ca_dgw_sf %>% 
+  st_intersection(sj_county_sf)
+
+ggplot() + 
+  geom_sf(data = sj_county_sf) + 
+  geom_sf(data = sj_depth_sf, aes(color = depth)) + 
+  theme_void()
+```
+
+# Spatial interpolation
+
+## Make a variogram
+
+```{r}
+sj_dgw_vgm <- gstat::variogram(depth ~ 1, data = sj_depth_sf) # Tell it what data were starting with and the relationship you're looking for. Put any covariates to go with it. In this case we just put 1 because there are no covariates
+# In this case we put 1 and the variogram is just referencing the covariance of each well with the wells around it 
+plot(sj_dgw_vgm)
+
+# We want to fit a line to this plot so that when we do our interpolation we can use that function. Done below
+
+vgm_fit <- fit.variogram(sj_dgw_vgm,
+                         model = vgm(model = "Gau", nugget = TRUE)) # Fit a Gaussian Model to this data here 
+
+plot(sj_dgw_vgm, vgm_fit)
+
+# Notice that the nugget here goes straight to zero, we could say nugget = TRUE, which will include a nugget component in the model and might help fit our variogram better. If you dont say nugget = TRUE then it assumes that there is no nugget so it starts at zero. 
+
+attr(vgm_fit, "SSErr") # Allows you to check your sum of squared errors. Allows you to compare the fit of your variogram model to the variogram that you have. 
+
+# You dont want your attributes magnitude itself. When you do this to compare two models, the lower value is the one that better fits your data. 
+```
+
+```{r}
+# set up a grid and interpolate everywhere on this grid where the model says the data should be 
+
+sj_grid <- st_bbox(sj_county_sf) %>% #Draw a square the exact size of my county
+  stars::st_as_stars(dx = 1000, dy = 1000) # 1000 km on either side. These values might be driven by your data needs and how strong your computer is 
+
+# Take the variogram, the grid, the model and smash them together to get interpolations 
+
+# Krige takes your data of known well depths, and predict the depth in areas around it 
+
+# We're trying to predict well depth based on what the model does 
+dgw_krige <- krige(depth ~ 1, sj_depth_sf, sj_grid, model = vgm_fit)
+
+plot(dgw_krige) # Creates a map of depth to predict the value of 
+```
+
+```{r}
+# Take dgw_krige object and turn it into something easier to work with by passing it to the rast function in terra package. Says take this thing and turn it into a raster
+krige_rast <- dgw_krige %>% 
+  terra::rast() %>% # Turn it into a raster. But your names are trash. One layer is prediction and the other one is variance. Naming them accordingly below 
+  setNames(c("pred", "var"))
+
+ggplot() + 
+  tidyterra::geom_spatraster(data = krige_rast, aes(fill = pred)) + 
+  geom_sf(data = sj_depth_sf, aes(fill = depth), shape = 21) +
+  geom_sf(data = sj_county_sf, color = "black", fill = NA) + 
+  scale_fill_gradient(low = "blue", high = "yellow")
+```
+
+Points are filled with actual depth and background is filled with predicted depth. Check the graph made with fill = var (variance) instead of pred. This will show you the variance around the predicted values at a certain distance from the observed values. We can see that the
+
+Inverse distance weighting gives you no understanding of the variance (uncertainty), but this one does account for the variability.
